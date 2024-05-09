@@ -23,7 +23,7 @@ from pycoral.utils.edgetpu import run_inference
 If not define -> uses pre-defined default models
 '''
 
-default_model_dir = 'models/tf2_mobilenet_v1'
+default_model_dir = 'models/Mobilenet_v2'
 default_model = 'ssd_mobilenet_v2_coco_quant_postprocess_edgetpu.tflite'
 default_labels = 'coco_labels.txt'
 

@@ -2,7 +2,7 @@ import argparse
 import cv2
 import os
 import time
-from logger import fps_logger, average_fps_logger, average_inference_time_logger
+from logger import fps_logger, average_fps_logger, average_inference_time_logger, average_precision_logger
 
 from tflite_runtime.interpreter import Interpreter
 
@@ -11,7 +11,13 @@ from pycoral.adapters.detect import get_objects
 from pycoral.utils.edgetpu import make_interpreter
 from pycoral.utils.edgetpu import run_inference
 
+from logger import LoggedData
+
 default_labels = 'coco_labels.txt'
+
+def get_average_inference_score(objs): 
+    total_score = sum(obj.score for obj in objs)
+    return total_score/len(objs)
 
 def load_all_model():
     models_fullpath = []
@@ -46,7 +52,6 @@ def get_cmd():
     parser.add_argument('--source', type=str, help='Index of which video source to use.', default="webcam")
     parser.add_argument('--threshold', type=float, default=0.1,
                         help='classifier score threshold')
-    parser.add_argument('--edgetpu', help='EdgeTpu Flag', default=False)
 
     return parser.parse_args()
 
@@ -56,20 +61,18 @@ def main():
 
     models = load_all_model()
     
-    model_average_fps =[]
-    
-    model_average_inference_time = []
-    
-    model_average_precision = []
-    
+    all_models_data = []
     
     for model in models:
         print('Loading {} with {} labels as default.'.format(model, args.labels))
-        labels = load_label(args.labels)
-    
-        if args.edgetpu == "True": 
+        labels = load_label(args.labels)   
+        
+        isEdgeTPUEnabled = True
+             
+        if "_edgetpu" in model: 
             interpreter = make_interpreter(model) # doesn't have to load delegate as make_interpreter already loaded it for us
         else:
+            isEdgeTPUEnabled = False
             non_tpu_model = model.replace("_edgetpu", "")
             interpreter = Interpreter(non_tpu_model)   
             
@@ -87,6 +90,7 @@ def main():
         fps_values = []
         inference_time = []
         times = []
+        precisions = []
 
         while cap.isOpened():
             frame_count += 1
@@ -104,8 +108,9 @@ def main():
             t2 = time.time()
             inference_time.append(t2-t1)
             objs = get_objects(interpreter, args.threshold)[:args.top_k] # detected objects, top K mean the most positive scoring only
+            if len(objs) > 0:
+                precisions.append(get_average_inference_score(objs=objs))
             cv2_im = append_objs_to_img(cv2_im, inference_size, objs, labels)
-            print(objs)
             
             # get the current running time for the fps
             elapsed_time = time.time() - start_time
@@ -116,29 +121,32 @@ def main():
 
             cv2.imshow('frame', cv2_im)
             if cv2.waitKey(1) & 0xFF == ord('q'):
-                average_fps_logger(
-                    average_fps=model_average_fps,
-                    testedModel=[model.split('/')[2] for model in models]   
+                loggedData = LoggedData(
+                    testedModel=model.split('/')[1],
+                    average_fps = round(sum(fps_values)/len(fps_values),5),
+                    average_inference_time = sum(inference_time)/len(inference_time),
+                    average_precision = sum(precisions)/len(precisions),
+                    isEdgeTPUEnabled = isEdgeTPUEnabled
                 )
-                average_inference_time_logger(
-                    average_inference_time=model_average_inference_time,
-                    testedModel=models
-                )
+                all_models_data.append(loggedData)
+                average_fps_logger(all_models_data)
+                average_inference_time_logger(all_models_data)
+                average_precision_logger(all_models_data)
                 break
         print("~~~~~~~~~~~~~~~~FINISH EVALUATING~~~~~~~~~~~~~~")
-        model_average_fps.append(round(sum(fps_values)/len(fps_values),5))
-        model_average_inference_time.append(sum(inference_time)/len(inference_time))
+        loggedData = LoggedData(
+            testedModel=model.split('/')[1],
+            average_fps = round(sum(fps_values)/len(fps_values),5),
+            average_inference_time = sum(inference_time)/len(inference_time),
+            average_precision = sum(precisions)/len(precisions),
+            isEdgeTPUEnabled = isEdgeTPUEnabled
+        )
+        all_models_data.append(loggedData)
     cap.release()
     cv2.destroyAllWindows()
-    average_fps_logger(
-        average_fps=model_average_fps,
-        testedModel=[model.split('/')[2] for model in models] 
-    )
-    average_inference_time_logger(
-        average_inference_time=model_average_inference_time,
-        testedModel=[model.split('/')[2] for model in models]   
-    )
-
+    average_fps_logger(all_models_data)
+    average_inference_time_logger(all_models_data)
+    average_precision_logger(all_models_data)
 
 
 def append_objs_to_img(cv2_im, inference_size, objs, labels):
